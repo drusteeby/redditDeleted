@@ -8,22 +8,25 @@ This bot will **permanently delete** all your Reddit posts and comments. This ac
 
 ## Features
 
-- Overwrites all comments and posts with blank text before deletion
+- Overwrites all comments and posts with replacement text before deletion
 - Processes both text posts and comments
 - Rate limiting protection with configurable delays
 - Progress tracking for all operations
+- Detailed error reporting for failed items
 - Confirmation prompt before deletion
+- Automatic .env file loading for easy configuration
 
 ## How It Works
 
 1. The bot fetches all your posts and comments using the Reddit API
 2. For each comment:
-   - Overwrites the content with blank text
+   - Overwrites the content with replacement text ("[deleted]")
    - Deletes the comment
 3. For each post:
-   - Overwrites text posts (self posts) with blank text
+   - Overwrites text posts (self posts) with replacement text ("[deleted]")
    - Deletes the post
 4. All operations include delays to avoid Reddit's rate limiting
+5. Failed operations are tracked and reported at the end
 
 ## Prerequisites
 
@@ -72,16 +75,23 @@ REDDIT_USER_AGENT=RedditDeleter/1.0
 
 ## Usage
 
-### Using environment variables from .env file
+The bot will automatically load credentials from a `.env` file if one exists in the same directory.
 
-If you have a `.env` file, export the variables:
+### Method 1: Using .env file (Recommended)
+
+Create a `.env` file in the project directory:
 
 ```bash
-export $(cat .env | xargs)
+cp .env.example .env
+```
+
+Edit the `.env` file with your credentials, then simply run:
+
+```bash
 python reddit_deleter.py
 ```
 
-### Setting environment variables directly
+### Method 2: Setting environment variables directly
 
 ```bash
 export REDDIT_CLIENT_ID="your_client_id"
