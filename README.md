@@ -32,7 +32,7 @@ This bot will **permanently delete** all your Reddit posts and comments. This ac
 
 - Python 3.6 or higher
 - A Reddit account
-- Reddit API credentials (client ID and secret)
+- Reddit API credentials (client ID and secret from a web app)
 
 ## Setup
 
@@ -42,12 +42,14 @@ This bot will **permanently delete** all your Reddit posts and comments. This ac
 2. Click "create another app..." at the bottom
 3. Fill in the form:
    - **name**: Choose any name (e.g., "RedditDeleter")
-   - **App type**: Select "script"
+   - **App type**: Select "**web app**" (NOT "script")
    - **description**: Optional
    - **about url**: Optional
-   - **redirect uri**: Use `http://localhost:8080` (required but not used)
+   - **redirect uri**: Use `http://localhost:8080` (this is required for OAuth)
 4. Click "create app"
 5. Note your **client ID** (under the app name) and **client secret**
+
+**Important**: You must create a **web app**, not a "script" app. Web apps don't require Reddit approval and use browser-based OAuth authentication.
 
 ### 2. Install Dependencies
 
@@ -68,14 +70,25 @@ Edit `.env` and add your credentials:
 ```
 REDDIT_CLIENT_ID=your_client_id_here
 REDDIT_CLIENT_SECRET=your_client_secret_here
-REDDIT_USERNAME=your_reddit_username
-REDDIT_PASSWORD=your_reddit_password
 REDDIT_USER_AGENT=RedditDeleter/1.0
+REDDIT_REDIRECT_URI=http://localhost:8080
 ```
+
+**Note**: You no longer need to provide your username and password. The app will use OAuth2 browser authentication instead.
 
 ## Usage
 
 The bot will automatically load credentials from a `.env` file if one exists in the same directory.
+
+### Authentication
+
+When you run the script for the first time, it will:
+1. Open your web browser automatically
+2. Ask you to authorize the application on Reddit
+3. Redirect you back to the application
+4. Save a refresh token for future use (in `reddit_token.json`)
+
+On subsequent runs, the saved token will be used automatically, so you won't need to authorize again unless the token expires.
 
 ### Method 1: Using .env file (Recommended)
 
@@ -96,22 +109,38 @@ python reddit_deleter.py
 ```bash
 export REDDIT_CLIENT_ID="your_client_id"
 export REDDIT_CLIENT_SECRET="your_client_secret"
-export REDDIT_USERNAME="your_username"
-export REDDIT_PASSWORD="your_password"
 python reddit_deleter.py
 ```
 
 ### Running the bot
 
 When you run the script, it will:
-1. Display your username
-2. Ask for confirmation by typing `DELETE`
-3. Process all your comments first, then all your posts
-4. Show progress for each item processed
+1. Authenticate you via browser (first time only)
+2. Display your username
+3. Ask for confirmation by typing `DELETE`
+4. Process all your comments first, then all your posts
+5. Show progress for each item processed
 
 **Example output:**
 
 ```
+============================================================
+Browser-Based Authentication
+============================================================
+A browser window will open for you to authorize this application.
+After authorization, you'll be redirected back to this application.
+============================================================
+
+Please open this URL in your browser:
+https://www.reddit.com/api/v1/authorize?...
+
+Browser opened automatically. If not, please copy and paste the URL above.
+
+Waiting for authorization...
+Refresh token saved to reddit_token.json
+
+Successfully authenticated as: your_username
+
 ============================================================
 WARNING: This will DELETE all your Reddit posts and comments!
 ============================================================
@@ -146,18 +175,28 @@ deleter.delete_all(delay=2)  # Change delay value here
 
 ## Security Notes
 
-- **Never commit your `.env` file** - it contains your Reddit password and API credentials
-- The `.env` file is already included in `.gitignore`
+- **Never commit your `.env` file** - it contains your Reddit API credentials
+- **Never commit `reddit_token.json`** - it contains your OAuth refresh token
+- Both files are already included in `.gitignore`
 - Consider using a dedicated API-only account for bot operations
-- After deletion, remember to revoke the app's access at https://www.reddit.com/prefs/apps
+- After deletion, you can revoke the app's access at https://www.reddit.com/prefs/apps
+- The refresh token is stored locally and can be deleted at any time by removing `reddit_token.json`
 
 ## Troubleshooting
 
 ### Authentication Errors
 
-- Verify your credentials are correct
-- Make sure you've created a "script" type app, not a "web app"
-- Check that your Reddit account password is current
+- Verify your client ID and client secret are correct
+- Make sure you've created a "**web app**" type, not a "script" app
+- Ensure the redirect URI in your app settings is `http://localhost:8080`
+- If you get "invalid_grant" errors, delete `reddit_token.json` and re-authenticate
+- Make sure no other application is using port 8080
+
+### Browser Doesn't Open
+
+- If the browser doesn't open automatically, copy and paste the URL shown in the terminal
+- Make sure you're running the script in an environment where a browser is available
+- If running on a remote server, you may need to manually handle the OAuth flow
 
 ### Rate Limiting
 

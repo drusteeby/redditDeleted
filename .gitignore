@@ -1,6 +1,9 @@
 # Environment files
 .env
 
+# Token files
+reddit_token.json
+
 # Python
 __pycache__/
 *.py[cod]

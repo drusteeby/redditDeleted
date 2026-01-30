@@ -9,32 +9,188 @@ It first overwrites the content with replacement text, then deletes the content.
 import praw
 import time
 import sys
+import os
+import json
+import socket
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from urllib.parse import urlparse, parse_qs
 
 # Replacement text used to overwrite content before deletion
 REPLACEMENT_TEXT = "[deleted]"
 
+# File to store refresh token for future use
+TOKEN_FILE = "reddit_token.json"
+
+
+class OAuthCallbackHandler(BaseHTTPRequestHandler):
+    """HTTP request handler for OAuth2 callback."""
+    
+    def do_GET(self):
+        """Handle the OAuth callback from Reddit."""
+        # Parse the authorization code from the callback URL
+        parsed_path = urlparse(self.path)
+        query_params = parse_qs(parsed_path.query)
+        
+        if 'code' in query_params:
+            # Store the code for retrieval
+            self.server.auth_code = query_params['code'][0]
+            
+            # Send success response to browser
+            self.send_response(200)
+            self.send_header('Content-type', 'text/html')
+            self.end_headers()
+            self.wfile.write(b"""
+                <html>
+                <head><title>Reddit Authentication</title></head>
+                <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
+                    <h1 style="color: #4CAF50;">Authentication Successful!</h1>
+                    <p>You can close this window and return to the terminal.</p>
+                </body>
+                </html>
+            """)
+        elif 'error' in query_params:
+            # Handle error from Reddit
+            self.server.auth_error = query_params['error'][0]
+            self.send_response(400)
+            self.send_header('Content-type', 'text/html')
+            self.end_headers()
+            self.wfile.write(f"""
+                <html>
+                <head><title>Reddit Authentication Error</title></head>
+                <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
+                    <h1 style="color: #f44336;">Authentication Failed!</h1>
+                    <p>Error: {query_params['error'][0]}</p>
+                    <p>You can close this window and return to the terminal.</p>
+                </body>
+                </html>
+            """.encode())
+        
+    def log_message(self, format, *args):
+        """Suppress log messages."""
+        pass
+
 
 class RedditDeleter:
-    def __init__(self, client_id, client_secret, username, password, user_agent):
+    def __init__(self, client_id, client_secret, user_agent, redirect_uri="http://localhost:8080"):
         """
-        Initialize the Reddit API connection.
+        Initialize the Reddit API connection with OAuth2.
         
         Args:
             client_id: Reddit API client ID
             client_secret: Reddit API client secret
-            username: Reddit username
-            password: Reddit password
             user_agent: User agent string for API requests
+            redirect_uri: OAuth redirect URI (default: http://localhost:8080)
         """
+        self.client_id = client_id
+        self.client_secret = client_secret
+        self.user_agent = user_agent
+        self.redirect_uri = redirect_uri
+        self.reddit = None
+        self.username = None
+        
+    def _save_refresh_token(self, refresh_token):
+        """Save refresh token to file for future use."""
+        with open(TOKEN_FILE, 'w') as f:
+            json.dump({'refresh_token': refresh_token}, f)
+        print(f"Refresh token saved to {TOKEN_FILE}")
+        
+    def _load_refresh_token(self):
+        """Load refresh token from file if it exists."""
+        if os.path.exists(TOKEN_FILE):
+            try:
+                with open(TOKEN_FILE, 'r') as f:
+                    data = json.load(f)
+                    return data.get('refresh_token')
+            except (json.JSONDecodeError, IOError):
+                return None
+        return None
+        
+    def authenticate(self):
+        """
+        Authenticate with Reddit using OAuth2 browser flow.
+        Tries to use saved refresh token first, falls back to browser auth if needed.
+        """
+        # Try to use saved refresh token first
+        refresh_token = self._load_refresh_token()
+        
+        if refresh_token:
+            print("Found saved refresh token, attempting to use it...")
+            try:
+                self.reddit = praw.Reddit(
+                    client_id=self.client_id,
+                    client_secret=self.client_secret,
+                    user_agent=self.user_agent,
+                    refresh_token=refresh_token
+                )
+                # Test the connection
+                self.username = self.reddit.user.me().name
+                print(f"Successfully authenticated as: {self.username}")
+                return
+            except Exception as e:
+                print(f"Saved token invalid or expired: {e}")
+                print("Proceeding with browser authentication...")
+                # Remove invalid token file
+                if os.path.exists(TOKEN_FILE):
+                    os.remove(TOKEN_FILE)
+        
+        # Perform browser-based OAuth2 authentication
+        print("\n" + "=" * 60)
+        print("Browser-Based Authentication")
+        print("=" * 60)
+        print("A browser window will open for you to authorize this application.")
+        print("After authorization, you'll be redirected back to this application.")
+        print("=" * 60 + "\n")
+        
+        # Create Reddit instance for OAuth
         self.reddit = praw.Reddit(
-            client_id=client_id,
-            client_secret=client_secret,
-            username=username,
-            password=password,
-            user_agent=user_agent
+            client_id=self.client_id,
+            client_secret=self.client_secret,
+            user_agent=self.user_agent,
+            redirect_uri=self.redirect_uri
         )
-        self.username = username
-        # Don't store password after authentication
+        
+        # Generate authorization URL
+        scopes = ['identity', 'edit', 'history', 'read']
+        auth_url = self.reddit.auth.url(scopes, 'random_state', 'permanent')
+        
+        print("Please open this URL in your browser:")
+        print(auth_url)
+        print()
+        
+        # Try to open browser automatically
+        import webbrowser
+        try:
+            webbrowser.open(auth_url)
+            print("Browser opened automatically. If not, please copy and paste the URL above.")
+        except:
+            print("Could not open browser automatically. Please copy and paste the URL above.")
+        
+        print("\nWaiting for authorization...")
+        
+        # Start local server to receive callback
+        port = int(urlparse(self.redirect_uri).port or 8080)
+        server = HTTPServer(('localhost', port), OAuthCallbackHandler)
+        server.auth_code = None
+        server.auth_error = None
+        
+        # Wait for one request (the callback)
+        server.handle_request()
+        
+        if server.auth_error:
+            raise Exception(f"Authentication failed: {server.auth_error}")
+        
+        if not server.auth_code:
+            raise Exception("No authorization code received")
+        
+        # Exchange authorization code for refresh token
+        refresh_token = self.reddit.auth.authorize(server.auth_code)
+        
+        # Save refresh token for future use
+        self._save_refresh_token(refresh_token)
+        
+        # Get username
+        self.username = self.reddit.user.me().name
+        print(f"\nSuccessfully authenticated as: {self.username}")
         
     def overwrite_and_delete_comments(self, delay=2):
         """
@@ -181,7 +337,6 @@ class RedditDeleter:
 
 def main():
     """Main entry point for the script."""
-    import os
     from dotenv import load_dotenv
     
     # Load environment variables from .env file if it exists
@@ -190,32 +345,32 @@ def main():
     # Get credentials from environment variables
     client_id = os.environ.get('REDDIT_CLIENT_ID')
     client_secret = os.environ.get('REDDIT_CLIENT_SECRET')
-    username = os.environ.get('REDDIT_USERNAME')
-    password = os.environ.get('REDDIT_PASSWORD')
     user_agent = os.environ.get('REDDIT_USER_AGENT', 'RedditDeleter/1.0')
+    redirect_uri = os.environ.get('REDDIT_REDIRECT_URI', 'http://localhost:8080')
     
-    # Check if all required credentials are provided
-    if not all([client_id, client_secret, username, password]):
+    # Check if required credentials are provided
+    if not all([client_id, client_secret]):
         print("Error: Missing required environment variables!")
         print("\nRequired environment variables:")
         print("  - REDDIT_CLIENT_ID")
         print("  - REDDIT_CLIENT_SECRET")
-        print("  - REDDIT_USERNAME")
-        print("  - REDDIT_PASSWORD")
         print("  - REDDIT_USER_AGENT (optional, defaults to 'RedditDeleter/1.0')")
+        print("  - REDDIT_REDIRECT_URI (optional, defaults to 'http://localhost:8080')")
         print("\nYou can set these in a .env file or export them directly.")
         print("See README.md for setup instructions.")
         sys.exit(1)
     
-    # Create deleter instance and run
+    # Create deleter instance and authenticate
     try:
         deleter = RedditDeleter(
             client_id=client_id,
             client_secret=client_secret,
-            username=username,
-            password=password,
-            user_agent=user_agent
+            user_agent=user_agent,
+            redirect_uri=redirect_uri
         )
+        
+        # Authenticate using OAuth2
+        deleter.authenticate()
         
         # Prompt for confirmation
         print("\n" + "=" * 60)
@@ -231,6 +386,8 @@ def main():
             
     except Exception as e:
         print(f"Error: {e}")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
 
 
